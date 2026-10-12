@@ -1,0 +1,13 @@
+# 构建产物
+/target
+
+# 编辑器 / OS 残留
+*.swp
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 调试 / 临时脚本产物
+*.png
+*.log

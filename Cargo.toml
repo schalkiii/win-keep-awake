@@ -1,0 +1,31 @@
+[package]
+name = "win-keep-awake"
+version = "2.0.0"
+edition = "2021"
+description = "防屏幕超时锁定工具：现代 GUI + 系统托盘后台常驻，多层输入注入 + 电源管理声明，可配置定时自动停止"
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow"] }
+tray-icon = "0.26"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Power",
+    "Win32_System_SystemInformation",
+] }
+
+[[bin]]
+name = "WinKeepAwake"
+path = "src/main.rs"
+
+# 独立 exe 交付：LTO + 单编译单元 + 裁剪符号，体积最小化
+[profile.release]
+lto = "thin"
+opt-level = "s"
+codegen-units = 1
+strip = true
+panic = "abort"
