@@ -1,6 +1,6 @@
 [package]
 name = "win-keep-awake"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 description = "防屏幕超时锁定工具：现代 GUI + 系统托盘后台常驻，多层输入注入 + 电源管理声明，可配置定时自动停止"
 

@@ -7,7 +7,7 @@ Windows 原生防息屏/防锁定工具：eframe/egui GUI + 系统托盘后台�
 ## 怎么跑
 - 开发：`cargo run`（debug 带控制台）
 - 发布：`cargo build --release` → `target/release/WinKeepAwake.exe`（单文件、无控制台、约 5MB）
-- 门禁：`cargo test`（21 项）、`cargo clippy --all-targets` 必须零告警
+- 门禁：`cargo test`（23 项）、`cargo clippy --all-targets` 必须零告警
 
 ## 技术栈
 - Rust `edition 2021`，仅目标 Windows 10/11。
