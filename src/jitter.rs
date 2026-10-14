@@ -10,6 +10,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Power::{
     SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
 };
+use windows::Win32::System::Shutdown::LockWorkStation;
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetLastInputInfo, KEYBDINPUT, KEYEVENTF_KEYUP, LASTINPUTINFO, MOUSEINPUT, MOUSEEVENTF_MOVE,
@@ -160,6 +161,13 @@ pub fn keep_awake_release() {
     unsafe {
         SetThreadExecutionState(ES_CONTINUOUS);
     }
+}
+
+/// 立即锁定工作站（`LockWorkStation`，普通权限即可，无需管理员）。
+/// 用于"定时自动停止 + 到点立即锁屏"：仅释放电源声明并不会让屏幕立刻上锁
+/// （那要等系统自己的息屏超时），直接锁屏才符合"到点该锁了"的直觉。
+pub fn lock_workstation() -> bool {
+    unsafe { LockWorkStation().is_ok() }
 }
 
 /// 原生窗口显隐辅助（绕过 egui `ViewportCommand::Visible`，因为该 API 在部分版本存在

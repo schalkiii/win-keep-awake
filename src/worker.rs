@@ -8,8 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::jitter::{
-    get_idle_ms, keep_awake_active, keep_awake_release, perform_keyboard_injection,
-    perform_mouse_injection, MouseMode,
+    get_idle_ms, keep_awake_active, keep_awake_release, lock_workstation,
+    perform_keyboard_injection, perform_mouse_injection, MouseMode,
 };
 
 /// GUI -> 工作线程 的单向命令通道。工作线程每个 tick 都会尝试排空并应用。
@@ -20,6 +20,8 @@ pub enum Command {
     KeyboardEnabled(bool),
     /// `Some(Duration)` = 从此刻起计时，到点后自动停止保活；`None` = 关闭定时停止功能。
     AutoStop(Option<Duration>),
+    /// 定时停止到点时是否立即锁屏（`LockWorkStation`）。仅在启用定时停止时有意义。
+    SetLockOnStop(bool),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,6 +68,7 @@ struct Config {
     mouse_mode: MouseMode,
     keyboard_enabled: bool,
     auto_stop_after: Option<Duration>,
+    lock_on_stop: bool,
 }
 
 /// 测试钩子：生产路径全部为 `None`（走真实 Win32 调用），单元测试里注入确定性行为，
@@ -74,6 +77,7 @@ struct Config {
 type IdleFn = Box<dyn Fn() -> Option<u32> + Send + Sync>;
 type MouseFn = Box<dyn FnMut(MouseMode) -> (MouseMode, bool) + Send>;
 type KbFn = Box<dyn Fn() -> bool + Send + Sync>;
+type LockFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 #[derive(Default)]
 pub struct TestHooks {
@@ -83,6 +87,8 @@ pub struct TestHooks {
     pub mouse_inject: Option<MouseFn>,
     /// 覆盖键盘注入。
     pub kb_inject: Option<KbFn>,
+    /// 覆盖锁屏（单元测试注入，避免真的把开发机锁屏）。
+    pub lock: Option<LockFn>,
 }
 
 /// 工作线程的运行参数（tick 间隔等），测试可缩短以便快速验证。
@@ -143,6 +149,7 @@ impl Worker {
             mouse_mode: MouseMode::ZeroMove,
             keyboard_enabled: false,
             auto_stop_after: None,
+            lock_on_stop: false,
         };
 
         // 启动即声明一次，避免刚运行就命中已有的息屏计时器。
@@ -180,6 +187,13 @@ impl Worker {
         match hooks.kb_inject {
             Some(ref f) => f(),
             None => perform_keyboard_injection(),
+        }
+    }
+
+    fn lock_screen(&self, hooks: &TestHooks) -> bool {
+        match hooks.lock {
+            Some(ref f) => f(),
+            None => lock_workstation(),
         }
     }
 
@@ -245,6 +259,14 @@ impl Worker {
                     }
                     self.refresh(snapshot, None, None);
                 }
+                Command::SetLockOnStop(v) => {
+                    self.cfg.lock_on_stop = v;
+                    push_log(
+                        snapshot,
+                        format!("到点立即锁屏已{}", if v { "开启" } else { "关闭" }),
+                    );
+                    self.refresh(snapshot, None, None);
+                }
             }
         }
 
@@ -255,7 +277,19 @@ impl Worker {
                 self.cfg.running = false;
                 keep_awake_release();
                 self.auto_stop_started_at = None;
-                push_log(snapshot, "已到达设定时间，保活自动停止".to_string());
+                if self.cfg.lock_on_stop {
+                    let ok = self.lock_screen(&opts.hooks);
+                    push_log(
+                        snapshot,
+                        if ok {
+                            "已到达设定时间，保活自动停止并锁定屏幕".to_string()
+                        } else {
+                            "已到达设定时间，保活自动停止（锁屏请求未成功）".to_string()
+                        },
+                    );
+                } else {
+                    push_log(snapshot, "已到达设定时间，保活自动停止".to_string());
+                }
             }
         }
 
@@ -378,7 +412,7 @@ fn push_log(snapshot: &Arc<Mutex<Snapshot>>, line: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::mpsc;
 
     fn fast_opts(idle_ms: u32) -> WorkerOpts {
@@ -389,6 +423,7 @@ mod tests {
                 idle_override: Some(Box::new(move || Some(idle_ms))),
                 mouse_inject: Some(Box::new(|m| (m, true))),
                 kb_inject: Some(Box::new(|| true)),
+                lock: None,
             },
         }
     }
@@ -470,6 +505,7 @@ mod tests {
                 idle_override: Some(Box::new(|| Some(9_000))),
                 mouse_inject: Some(Box::new(|m| (m, false))),
                 kb_inject: None,
+                lock: None,
             },
         };
         let h = spawn_worker_with(rx, snap.clone(), opts);
@@ -494,6 +530,7 @@ mod tests {
                 // 模拟运行时自检失败：请求 ZeroMove 但实际以 Jiggle 生效
                 mouse_inject: Some(Box::new(|_| (MouseMode::Jiggle, true))),
                 kb_inject: None,
+                lock: None,
             },
         };
         let h = spawn_worker_with(rx, snap.clone(), opts);
@@ -519,6 +556,66 @@ mod tests {
         let s = snap.lock().unwrap();
         assert!(s.auto_stop_remaining_secs.is_none());
         assert!(s.log.iter().any(|l| l.contains("自动停止")));
+        drop(tx);
+        let _ = h;
+    }
+
+    #[test]
+    fn auto_stop_locks_when_enabled() {
+        let (tx, rx) = mpsc::channel();
+        let snap = Arc::new(Mutex::new(Snapshot::default()));
+        let locked = Arc::new(AtomicBool::new(false));
+        let locked2 = locked.clone();
+        let opts = WorkerOpts {
+            poll_interval: Duration::from_millis(10),
+            es_refresh_interval: Duration::from_secs(3600),
+            hooks: TestHooks {
+                idle_override: Some(Box::new(|| Some(0))),
+                mouse_inject: Some(Box::new(|m| (m, true))),
+                kb_inject: Some(Box::new(|| true)),
+                // 用钩子拦截锁屏，绝不真正锁开发机
+                lock: Some(Box::new(move || {
+                    locked2.store(true, Ordering::SeqCst);
+                    true
+                })),
+            },
+        };
+        let h = spawn_worker_with(rx, snap.clone(), opts);
+        tx.send(Command::SetLockOnStop(true)).unwrap();
+        tx.send(Command::AutoStop(Some(Duration::from_millis(80)))).unwrap();
+        assert!(wait_until(&snap, |s| s.status == Status::StoppedByTimer));
+        assert!(wait_until(&snap, |_| locked.load(Ordering::SeqCst)));
+        let s = snap.lock().unwrap();
+        assert!(s.log.iter().any(|l| l.contains("锁定屏幕")));
+        drop(tx);
+        let _ = h;
+    }
+
+    #[test]
+    fn auto_stop_does_not_lock_when_disabled() {
+        let (tx, rx) = mpsc::channel();
+        let snap = Arc::new(Mutex::new(Snapshot::default()));
+        let locked = Arc::new(AtomicBool::new(false));
+        let locked2 = locked.clone();
+        let opts = WorkerOpts {
+            poll_interval: Duration::from_millis(10),
+            es_refresh_interval: Duration::from_secs(3600),
+            hooks: TestHooks {
+                idle_override: Some(Box::new(|| Some(0))),
+                mouse_inject: Some(Box::new(|m| (m, true))),
+                kb_inject: Some(Box::new(|| true)),
+                lock: Some(Box::new(move || {
+                    locked2.store(true, Ordering::SeqCst);
+                    true
+                })),
+            },
+        };
+        let h = spawn_worker_with(rx, snap.clone(), opts);
+        // 不开 SetLockOnStop，默认应不锁屏
+        tx.send(Command::AutoStop(Some(Duration::from_millis(80)))).unwrap();
+        assert!(wait_until(&snap, |s| s.status == Status::StoppedByTimer));
+        thread::sleep(Duration::from_millis(60));
+        assert!(!locked.load(Ordering::SeqCst), "未开启到点锁屏，不应触发锁屏");
         drop(tx);
         let _ = h;
     }
@@ -568,6 +665,7 @@ mod tests {
                     (m, true)
                 })),
                 kb_inject: None,
+                lock: None,
             },
         };
         let h = spawn_worker_with(rx, snap.clone(), opts);

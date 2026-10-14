@@ -53,6 +53,7 @@ struct MyApp {
     ui_keyboard_enabled: bool,
     ui_auto_stop_enabled: bool,
     ui_auto_stop_mins: u64,
+    ui_lock_on_stop: bool,
     ui_minimize_on_close: bool,
 }
 
@@ -76,6 +77,7 @@ impl MyApp {
             ui_keyboard_enabled: false,
             ui_auto_stop_enabled: false,
             ui_auto_stop_mins: 60,
+            ui_lock_on_stop: false,
             ui_minimize_on_close: true,
         }
     }
@@ -362,6 +364,18 @@ fn controls(ui: &mut egui::Ui, app: &mut MyApp) {
                 app.send_cmd(Command::AutoStop(Some(Duration::from_secs(
                     app.ui_auto_stop_mins * 60,
                 ))));
+            }
+        });
+
+        ui.add_enabled_ui(app.ui_auto_stop_enabled, |ui| {
+            if ui
+                .checkbox(
+                    &mut app.ui_lock_on_stop,
+                    "到点立即锁屏（否则仅停止保活，需等系统自己息屏）",
+                )
+                .changed()
+            {
+                app.send_cmd(Command::SetLockOnStop(app.ui_lock_on_stop));
             }
         });
 
