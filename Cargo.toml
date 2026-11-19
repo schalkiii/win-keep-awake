@@ -1,6 +1,6 @@
 [package]
 name = "win-keep-awake"
-version = "2.3.2"
+version = "2.3.3"
 edition = "2021"
 description = "防息屏/防锁定工具：现代 GUI + 系统托盘常驻；双模式（屏幕常亮注入保活 / 息屏防睡——到点关屏但系统不休眠），可配置定时自动停止与托盘一键重启"
 

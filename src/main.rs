@@ -523,7 +523,10 @@ fn controls(ui: &mut egui::Ui, app: &mut MyApp) {
 
             if ui
                 .checkbox(&mut app.ui_keyboard_enabled, "键盘层 F13")
-                .on_hover_text("注入 F13 虚拟键：常见键盘没有这个键，几乎不会被任何软件绑定。")
+                .on_hover_text(
+                    "鼠标注入之外的额外补充：同一保活周期先注入鼠标、再注入 F13 虚拟键\
+                     （常见键盘没有这个键，几乎不会被任何软件绑定），两层叠加不互斥。",
+                )
                 .changed()
             {
                 app.send_cmd(Command::KeyboardEnabled(app.ui_keyboard_enabled));

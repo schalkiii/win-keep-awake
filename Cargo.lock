@@ -2927,7 +2927,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "win-keep-awake"
-version = "2.3.2"
+version = "2.3.3"
 dependencies = [
  "eframe",
  "png 0.17.16",
