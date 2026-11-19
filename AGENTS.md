@@ -35,10 +35,14 @@ Windows 原生防息屏/防锁定工具：eframe/egui GUI + 系统托盘后台�
 - 阶段一/二（三层防御 + GUI/托盘/定时停止）与阶段三（2.2.0：息屏防睡模式、电源计划动态管理、GPO 漂移校验、
   托盘重启）均已实现并通过 test/clippy/E2E（真机验证过 powercfg 写入、ES 声明、模式切换恢复）。
 - 2.3.0（2026-11-18）：GUI 翻新（分段模式选择器/小节布局/进度条/警示横幅/分级彩色日志/动态标题/状态徽标）、
-  exe 嵌入图标与 VERSIONINFO、托盘图标随模式切换、`--dump-icons` 调试出口。已部署 Desktop 运行。
+  exe 嵌入图标与 VERSIONINFO、托盘图标随模式切换、`--dump-icons` 调试出口。
+- 2.3.1（2026-11-19）：按用户反馈二轮打磨——修复托盘左键弹菜单（tray-icon 0.26 `menu_on_left_click` 默认 true，
+  已显式关闭）；GUI 去「AI 味」：扁平化（去卡片/胶囊徽标）、真实图标进头部、行式设置、全等宽日志；
+  模式设置区固定高度修切换抖动；日志区占满剩余高度（默认窗口 460×840）。
   注意坑：CLI 交接模式下 GUI 草稿要在用户操作前持续跟随 worker 快照（`ui_mode_touched`），
   一次性首帧同步会因 worker 秒级轮询排队而读到旧值；GUI 视觉验证用 PrintWindow 抓窗
-  （CopyFromScreen 会被前台窗口遮挡，SetForegroundWindow 受前台权限限制常静默失败）。
+  （CopyFromScreen 会被前台窗口遮挡，SetForegroundWindow 受前台权限限制常静默失败）；
+  egui 0.36 的 `Image::new` 只收 source（尺寸用 `fit_to_exact_size`），Slider 无宽度方法（用 `ui.add_sized`）。
 - **本机已知事实**（写代码/排障时必须记住）：开发机 ThinkBook 14 G8 IAL 三次夜间挂死均发生在
   「屏幕已关 + PowerToys Awake 持 SYSTEM 声明」环境下——系统级保活声明挡不住该机关屏路径挂死（嫌疑：核显驱动
   igdkmdn64 关屏/runtime D3，12× 0x141）。所以息屏防睡在 UI/README 里标注为实验性，过夜推荐防息屏模式。

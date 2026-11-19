@@ -85,6 +85,9 @@ struct MyApp {
     /// CLI 交接（`--screen-off-guard`）的模式命令在 worker 的秒级轮询里排队，
     /// 一次性首帧同步会赶在 worker 处理前读到旧值；持续跟随直到用户点击为止。
     ui_mode_touched: bool,
+    /// 头部真实图标纹理（64px 渲染，随模式切换），启动时加载一次终身复用。
+    icon_awake: egui::TextureHandle,
+    icon_guard: egui::TextureHandle,
 }
 
 impl MyApp {
@@ -100,6 +103,24 @@ impl MyApp {
         let hwnd_raw = extract_hwnd(cc);
 
         let tray = setup_tray(hwnd_raw, cmd_tx.clone(), snapshot.clone());
+
+        // 头部直接展示真实渲染的图标（与托盘/exe 同源），替代几何色块拼贴。
+        let icon_awake = cc.egui_ctx.load_texture(
+            "header-icon-awake",
+            egui::ColorImage::from_rgba_unmultiplied(
+                [64, 64],
+                &build_mode_icon_rgba(64, IconVariant::Awake),
+            ),
+            egui::TextureOptions::default(),
+        );
+        let icon_guard = cc.egui_ctx.load_texture(
+            "header-icon-guard",
+            egui::ColorImage::from_rgba_unmultiplied(
+                [64, 64],
+                &build_mode_icon_rgba(64, IconVariant::NightGuard),
+            ),
+            egui::TextureOptions::default(),
+        );
 
         Self {
             snapshot,
@@ -118,6 +139,8 @@ impl MyApp {
             tray_state: None,
             last_title: String::new(),
             ui_mode_touched: false,
+            icon_awake,
+            icon_guard,
         }
     }
 
@@ -208,14 +231,15 @@ impl eframe::App for MyApp {
             }
         }
 
+        // 扁平布局：无卡片嵌套，所有内容统一缩进到面板边距，段落用留白+小节标题分组。
         egui::CentralPanel::default().show(ui, |ui| {
-            header(ui, &snap);
+            ui.add_space(2.0);
+            header(ui, &snap, &self.icon_awake, &self.icon_guard);
             ui.add_space(10.0);
-            status_card(ui, &snap);
+            hero(ui, &snap);
             ui.add_space(10.0);
             controls(ui, self);
-            ui.add_space(10.0);
-            log_card(ui, &snap);
+            log_section(ui, &snap);
         });
     }
 
@@ -258,234 +282,230 @@ fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(visuals);
 
     ctx.global_style_mut(|style| {
-        style.spacing.item_spacing = Vec2::new(10.0, 7.0);
-        style.spacing.button_padding = Vec2::new(12.0, 7.0);
-        style.spacing.window_margin = Margin::same(14);
-        style.visuals.widgets.noninteractive.corner_radius = CornerRadius::same(8);
-        style.visuals.widgets.inactive.corner_radius = CornerRadius::same(8);
-        style.visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
-        style.visuals.widgets.active.corner_radius = CornerRadius::same(8);
-        style.visuals.window_corner_radius = CornerRadius::same(14);
-        style.visuals.menu_corner_radius = CornerRadius::same(10);
+        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+        style.spacing.button_padding = Vec2::new(14.0, 6.0);
+        style.spacing.window_margin = Margin::same(16);
+        style.visuals.widgets.noninteractive.corner_radius = CornerRadius::same(6);
+        style.visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
+        style.visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
+        style.visuals.widgets.active.corner_radius = CornerRadius::same(6);
+        style.visuals.window_corner_radius = CornerRadius::same(8);
+        style.visuals.menu_corner_radius = CornerRadius::same(8);
         style
             .text_styles
-            .insert(TextStyle::Heading, egui::FontId::proportional(19.0));
+            .insert(TextStyle::Heading, egui::FontId::proportional(15.0));
         style
             .text_styles
-            .insert(TextStyle::Body, egui::FontId::proportional(14.0));
+            .insert(TextStyle::Body, egui::FontId::proportional(13.5));
         style
             .text_styles
-            .insert(TextStyle::Button, egui::FontId::proportional(13.5));
+            .insert(TextStyle::Button, egui::FontId::proportional(13.0));
         style
             .text_styles
-            .insert(TextStyle::Small, egui::FontId::proportional(11.5));
+            .insert(TextStyle::Small, egui::FontId::proportional(11.0));
         style
             .text_styles
-            .insert(TextStyle::Monospace, egui::FontId::monospace(11.5));
+            .insert(TextStyle::Monospace, egui::FontId::monospace(11.0));
     });
 }
 
 // ------------------------------------------------------------------ UI ----
 
-fn header(ui: &mut egui::Ui, snap: &Snapshot) {
+fn header(
+    ui: &mut egui::Ui,
+    snap: &Snapshot,
+    icon_awake: &egui::TextureHandle,
+    icon_guard: &egui::TextureHandle,
+) {
     ui.horizontal(|ui| {
-        // 品牌徽标：圆角方块 + 白点，exe 图标的极简呼应。
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(32.0, 32.0), egui::Sense::hover());
-        let logo = rect.shrink(2.0);
-        ui.painter()
-            .rect_filled(logo, CornerRadius::same(10), ACCENT_COLOR);
-        ui.painter()
-            .circle_filled(logo.center() - egui::vec2(0.0, 3.0), 5.0, Color32::WHITE);
+        // 真实渲染的应用图标（与托盘/exe 同源），随模式切换。
+        let icon = match snap.mode {
+            Mode::KeepScreenOn => icon_awake,
+            Mode::ScreenOffGuard => icon_guard,
+        };
+        ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(26.0, 26.0)));
+        ui.label(
+            RichText::new("WinKeepAwake")
+                .strong()
+                .size(15.0)
+                .color(TEXT_MAIN),
+        );
 
-        ui.vertical(|ui| {
-            ui.label(
-                RichText::new("WinKeepAwake")
-                    .strong()
-                    .size(19.0)
-                    .color(TEXT_MAIN),
-            );
-            ui.label(
-                RichText::new("防息屏 / 息屏防睡 · 托盘守护")
-                    .size(11.5)
-                    .color(TEXT_DIM),
-            );
-        });
-
+        // 右侧状态：小圆点 + 文字（Win11 原生风格，不用胶囊徽标）。
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            chip(ui, status_label(snap.status), status_color(snap.status));
+            ui.label(
+                RichText::new(status_label(snap.status))
+                    .size(12.0)
+                    .strong()
+                    .color(status_color(snap.status)),
+            );
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), egui::Sense::hover());
+            ui.painter()
+                .circle_filled(rect.center(), 3.5, status_color(snap.status));
         });
     });
 }
 
-fn status_card(ui: &mut egui::Ui, snap: &Snapshot) {
-    card(ui, |ui| {
-        // 模式徽标 + 空闲读数：一行看懂「现在以什么方式保护、系统空闲多久了」
-        ui.horizontal(|ui| {
-            let (mode_txt, mode_color) = match snap.mode {
-                Mode::KeepScreenOn => ("防息屏 · 屏幕常亮", ACCENT_COLOR),
-                Mode::ScreenOffGuard => ("息屏防睡 · 关屏不休眠", GUARD_COLOR),
-            };
-            chip(ui, mode_txt, mode_color);
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!("空闲 {:.1}s", snap.current_idle_ms as f64 / 1000.0))
-                        .size(12.0)
-                        .color(TEXT_DIM),
-                );
-            });
-        });
-
-        ui.add_space(8.0);
-
-        match snap.mode {
-            Mode::KeepScreenOn => {
-                let frac = (snap.current_idle_ms as f32
-                    / ((snap.idle_threshold_secs as f32) * 1000.0).max(1.0))
-                .clamp(0.0, 1.0);
-                ui.label(
-                    RichText::new(format!(
-                        "空闲 {}s / 阈值 {}s · 到点注入无感输入",
-                        snap.current_idle_ms / 1000,
-                        snap.idle_threshold_secs
-                    ))
-                    .size(11.5)
+/// 当前状态陈述区：模式行 + 一行数据说明 + 4px 细条（定时停止剩余并入同一行节奏）。
+fn hero(ui: &mut egui::Ui, snap: &Snapshot) {
+    let (mode_txt, mode_color) = match snap.mode {
+        Mode::KeepScreenOn => ("防息屏 · 屏幕保持常亮", ACCENT_COLOR),
+        Mode::ScreenOffGuard => ("息屏防睡 · 到点关屏，系统不休眠", GUARD_COLOR),
+    };
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 4.0, mode_color);
+        ui.label(RichText::new(mode_txt).size(13.0).strong().color(TEXT_MAIN));
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("空闲 {:.1}s", snap.current_idle_ms as f64 / 1000.0))
+                    .monospace()
+                    .size(11.0)
                     .color(TEXT_DIM),
-                );
-                ui.add(progress_bar(frac, ACCENT_COLOR));
-                ui.add_space(5.0);
-                ui.label(
-                    RichText::new(format!("累计注入 {} 次", snap.injections_done))
-                        .size(11.0)
-                        .color(TEXT_FAINT),
-                );
-            }
-            Mode::ScreenOffGuard => {
-                if snap.display_off_active {
-                    let target = (snap.display_off_mins * 60) as f32;
-                    let idle = snap.current_idle_ms as f32 / 1000.0;
-                    let remaining = (target - idle).max(0.0);
-                    if remaining > 0.0 {
-                        ui.label(
-                            RichText::new(format!(
-                                "约 {} 分 {:02} 秒后关屏 · 系统保持满速运行",
-                                (remaining as u64) / 60,
-                                (remaining as u64) % 60
-                            ))
-                            .size(11.5)
-                            .color(TEXT_DIM),
-                        );
-                        ui.add(progress_bar(
-                            (idle / target.max(1.0)).clamp(0.0, 1.0),
-                            GUARD_COLOR,
-                        ));
-                    } else {
-                        ui.label(
-                            RichText::new("屏幕应已关闭 · 系统保持满速运行")
-                                .size(11.5)
-                                .color(TEXT_DIM),
-                        );
-                        ui.add(progress_bar(1.0, GUARD_COLOR));
-                    }
-                } else {
-                    // 写入失败的安全降级路径：显式横幅 + 原因，而不是一行小字。
-                    warn_banner(
-                        ui,
-                        "息屏防睡未生效：关屏超时写入失败",
-                        &format!(
-                            "已安全降级为屏幕常亮，系统依然保持唤醒。原因：{}",
-                            snap.power_note.as_deref().unwrap_or("未知")
-                        ),
-                    );
-                }
-            }
-        }
+            );
+        });
+    });
 
-        // 定时自动停止：剩余时间 + 总进度
-        if let Some(remaining) = snap.auto_stop_remaining_secs {
-            ui.add_space(7.0);
-            let total = snap.auto_stop_total_secs.unwrap_or(remaining.max(1)) as f32;
-            let frac = 1.0 - (remaining as f32 / total);
+    ui.add_space(6.0);
+
+    match snap.mode {
+        Mode::KeepScreenOn => {
+            let frac = (snap.current_idle_ms as f32
+                / ((snap.idle_threshold_secs as f32) * 1000.0).max(1.0))
+            .clamp(0.0, 1.0);
             ui.label(
                 RichText::new(format!(
-                    "定时停止：剩余 {} 分 {:02} 秒",
-                    remaining / 60,
-                    remaining % 60
+                    "到点注入无感输入 · 已注入 {} 次",
+                    snap.injections_done
                 ))
-                .size(11.5)
-                .color(AMBER),
+                .size(11.0)
+                .color(TEXT_FAINT),
             );
-            ui.add(progress_bar(frac.clamp(0.0, 1.0), AMBER));
+            ui.add(progress_bar(frac, ACCENT_COLOR));
         }
-    });
+        Mode::ScreenOffGuard => {
+            if snap.display_off_active {
+                let target = (snap.display_off_mins * 60) as f32;
+                let idle = snap.current_idle_ms as f32 / 1000.0;
+                let remaining = (target - idle).max(0.0);
+                if remaining > 0.0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "约 {} 分 {:02} 秒后关屏 · 系统保持满速运行",
+                            (remaining as u64) / 60,
+                            (remaining as u64) % 60
+                        ))
+                        .size(11.0)
+                        .color(TEXT_DIM),
+                    );
+                    ui.add(progress_bar(
+                        (idle / target.max(1.0)).clamp(0.0, 1.0),
+                        GUARD_COLOR,
+                    ));
+                } else {
+                    ui.label(
+                        RichText::new("屏幕已关 · 系统保持满速运行")
+                            .size(11.0)
+                            .color(TEXT_DIM),
+                    );
+                    ui.add(progress_bar(1.0, GUARD_COLOR));
+                }
+            } else {
+                // 写入失败的安全降级路径：显式横幅 + 原因，而不是一行小字。
+                warn_banner(
+                    ui,
+                    "息屏防睡未生效：关屏超时写入失败",
+                    &format!(
+                        "已安全降级为屏幕常亮，系统依然保持唤醒。原因：{}",
+                        snap.power_note.as_deref().unwrap_or("未知")
+                    ),
+                );
+            }
+        }
+    }
+
+    // 定时自动停止：剩余时间 + 总进度
+    if let Some(remaining) = snap.auto_stop_remaining_secs {
+        ui.add_space(6.0);
+        let total = snap.auto_stop_total_secs.unwrap_or(remaining.max(1)) as f32;
+        let frac = 1.0 - (remaining as f32 / total);
+        ui.label(
+            RichText::new(format!(
+                "定时停止：剩余 {} 分 {:02} 秒",
+                remaining / 60,
+                remaining % 60
+            ))
+            .size(11.0)
+            .color(AMBER),
+        );
+        ui.add(progress_bar(frac.clamp(0.0, 1.0), AMBER));
+    }
 }
 
-/// 统一样式的细进度条（高度 5px、圆角、指定颜色填充）。
+/// 统一样式的细进度条（4px、微圆角、指定颜色填充）。
 fn progress_bar(frac: f32, color: Color32) -> ProgressBar {
     ProgressBar::new(frac)
         .fill(color)
-        .desired_height(5.0)
-        .corner_radius(CornerRadius::same(3))
+        .desired_height(4.0)
+        .corner_radius(CornerRadius::same(2))
 }
 
+/// 模式设置区固定高度：两种模式的内容块高度不同，预留最大高度，
+/// 切换模式时下方段落纹丝不动（息屏防睡的横幅正文压缩到单行以贴近防息屏块高度）。
+const MODE_SETTINGS_MIN_HEIGHT: f32 = 104.0;
+
 fn controls(ui: &mut egui::Ui, app: &mut MyApp) {
-    card(ui, |ui| {
-        // —— 模式：最核心的选择放最上面，分段选择器一次点击到位 ——
-        segmented_mode(ui, app);
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(match app.ui_mode {
-                Mode::KeepScreenOn => "屏幕保持常亮：到点注入无感输入 + 电源声明，防止息屏/锁定",
-                Mode::ScreenOffGuard => "到点正常关屏（含外接显示器）：系统不休眠、不进低功耗转换",
-            })
-            .size(11.0)
-            .color(TEXT_FAINT),
-        );
+    // —— 模式分段选择器 + 运行主开关 ——
+    segmented_mode(ui, app);
+    ui.add_space(8.0);
 
-        ui.add_space(10.0);
+    let is_running = app.snapshot_clone().status == Status::Running;
+    let (btn_txt, btn_color) = if is_running {
+        ("暂停保活", AMBER)
+    } else {
+        ("开始保活", GREEN)
+    };
+    let btn = egui::Button::new(RichText::new(btn_txt).strong().color(Color32::BLACK))
+        .fill(btn_color)
+        .min_size(Vec2::new(ui.available_width(), 32.0))
+        .corner_radius(CornerRadius::same(6));
+    if ui.add(btn).clicked() {
+        app.send_cmd(Command::Running(!is_running));
+    }
 
-        // —— 运行 / 暂停 ——
-        let is_running = app.snapshot_clone().status == Status::Running;
-        let (btn_txt, btn_color) = if is_running {
-            ("暂停保活", AMBER)
-        } else {
-            ("开始保活", GREEN)
-        };
-        let btn = egui::Button::new(RichText::new(btn_txt).strong().color(Color32::WHITE))
-            .fill(btn_color)
-            .min_size(Vec2::new(0.0, 36.0));
-        if ui.add(btn).clicked() {
-            app.send_cmd(Command::Running(!is_running));
-        }
-
-        // —— 模式设置（随模式切换的内容区）——
-        ui.add_space(12.0);
-        section_label(ui, "模式设置");
-        match app.ui_mode {
-            Mode::KeepScreenOn => {
-                ui.label(
-                    RichText::new("空闲阈值（秒）—— 到点注入无感输入")
-                        .size(12.0)
-                        .color(TEXT_MAIN),
+    // —— 模式设置：行式布局（左标签右控件），原生设置面板的样子 ——
+    section_label(ui, "模式设置");
+    let top = ui.cursor().top();
+    match app.ui_mode {
+        Mode::KeepScreenOn => {
+            let mut changed = false;
+            setting_row(ui, "空闲阈值", |ui| {
+                let r = ui.add_sized(
+                    [160.0, 22.0],
+                    egui::Slider::new(&mut app.ui_idle_secs, 10..=300)
+                        .step_by(5.0)
+                        .suffix(" 秒"),
                 );
-                if ui
-                    .add(
-                        egui::Slider::new(&mut app.ui_idle_secs, 10..=300)
-                            .step_by(5.0)
-                            .text("秒"),
-                    )
-                    .changed()
-                {
-                    app.send_cmd(Command::IdleThresholdSecs(app.ui_idle_secs));
-                }
+                changed = r.changed();
+                r
+            });
+            if changed {
+                app.send_cmd(Command::IdleThresholdSecs(app.ui_idle_secs));
+            }
 
-                ui.add_space(4.0);
-                ui.label(RichText::new("鼠标注入方式").size(12.0).color(TEXT_MAIN));
+            setting_row(ui, "注入方式", |ui| {
                 ui.horizontal(|ui| {
                     let zero = ui
-                        .selectable_label(app.ui_mouse_mode == MouseMode::ZeroMove, "零位移（无感）")
+                        .selectable_label(
+                            app.ui_mouse_mode == MouseMode::ZeroMove,
+                            RichText::new("零位移").size(12.0),
+                        )
                         .clicked();
                     let jiggle = ui
-                        .selectable_label(app.ui_mouse_mode == MouseMode::Jiggle, "±1px 抖动")
+                        .selectable_label(
+                            app.ui_mouse_mode == MouseMode::Jiggle,
+                            RichText::new("±1px 抖动").size(12.0),
+                        )
                         .clicked();
                     if zero && app.ui_mouse_mode != MouseMode::ZeroMove {
                         app.ui_mouse_mode = MouseMode::ZeroMove;
@@ -496,115 +516,121 @@ fn controls(ui: &mut egui::Ui, app: &mut MyApp) {
                     }
                 })
                 .response
-                .on_hover_text(
-                    "零位移：光标完全不动，对绝大多数空闲检测有效；若系统不接受会自动降级为 ±1px 抖动。",
-                );
+            })
+            .on_hover_text(
+                "零位移：光标完全不动，对绝大多数空闲检测有效；若系统不接受会自动降级为 ±1px 抖动。",
+            );
 
-                ui.add_space(4.0);
-                if ui
-                    .checkbox(&mut app.ui_keyboard_enabled, "键盘层 F13（一般不需要）")
-                    .on_hover_text("注入 F13 虚拟键：常见键盘没有这个键，几乎不会被任何软件绑定。")
-                    .changed()
-                {
-                    app.send_cmd(Command::KeyboardEnabled(app.ui_keyboard_enabled));
-                }
-            }
-            Mode::ScreenOffGuard => {
-                ui.label(
-                    RichText::new("息屏等待（分钟）—— 之后正常关屏")
-                        .size(12.0)
-                        .color(TEXT_MAIN),
-                );
-                if ui
-                    .add(egui::Slider::new(&mut app.ui_display_off_mins, 1..=60).suffix(" 分钟"))
-                    .changed()
-                {
-                    app.ui_mode_touched = true;
-                    app.send_cmd(Command::DisplayOffMins(app.ui_display_off_mins));
-                }
-
-                ui.add_space(6.0);
-                warn_banner(
-                    ui,
-                    "实验性：先白天短测，暂勿过夜依赖",
-                    "本机 2026-11 三次夜间挂死均发生在「屏幕已关 + 系统保活请求在场」的等价环境\
-                     （PowerToys Awake 持 SYSTEM 声明）。显卡驱动修复前，过夜请用防息屏模式。",
-                );
-
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "关屏超时由本工具临时写入电源计划，暂停/退出时自动恢复原值；\
-                         每 5 分钟校验，被组策略改动会自动重应用。任何真实输入都会点亮屏幕。",
-                    )
-                    .size(11.0)
-                    .color(TEXT_FAINT),
-                )
-                .on_hover_text(
-                    "写入 VIDEOIDLE + VIDEOCONLOCK（隐藏设置）的 AC/DC 四项；\
-                     域组策略会周期性重置电源计划，漂移校验即为此设计。",
-                );
-            }
-        }
-
-        // —— 定时自动停止 ——
-        section_label(ui, "定时自动停止");
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut app.ui_auto_stop_enabled, "启用").changed() {
-                let dur = if app.ui_auto_stop_enabled {
-                    Some(Duration::from_secs(app.ui_auto_stop_mins * 60))
-                } else {
-                    None
-                };
-                app.send_cmd(Command::AutoStop(dur));
-            }
-            let mut mins_changed = false;
-            ui.add_enabled_ui(app.ui_auto_stop_enabled, |ui| {
-                if ui
-                    .add(egui::Slider::new(&mut app.ui_auto_stop_mins, 5..=480).suffix(" 分钟"))
-                    .changed()
-                {
-                    mins_changed = true;
-                }
-            });
-            if mins_changed {
-                app.send_cmd(Command::AutoStop(Some(Duration::from_secs(
-                    app.ui_auto_stop_mins * 60,
-                ))));
-            }
-        });
-
-        ui.add_enabled_ui(app.ui_auto_stop_enabled, |ui| {
             if ui
-                .checkbox(&mut app.ui_lock_on_stop, "到点立即锁屏（否则仅停止保活）")
-                .on_hover_text(
-                    "仅释放电源声明并不会让屏幕立刻上锁（要等系统自己的息屏超时），\
-                                开启后到点直接 LockWorkStation。",
-                )
+                .checkbox(&mut app.ui_keyboard_enabled, "键盘层 F13（一般不需要）")
+                .on_hover_text("注入 F13 虚拟键：常见键盘没有这个键，几乎不会被任何软件绑定。")
                 .changed()
             {
-                app.send_cmd(Command::SetLockOnStop(app.ui_lock_on_stop));
+                app.send_cmd(Command::KeyboardEnabled(app.ui_keyboard_enabled));
             }
-        });
+        }
+        Mode::ScreenOffGuard => {
+            let mut changed = false;
+            setting_row(ui, "息屏等待", |ui| {
+                let r = ui.add_sized(
+                    [160.0, 22.0],
+                    egui::Slider::new(&mut app.ui_display_off_mins, 1..=60).suffix(" 分钟"),
+                );
+                changed = r.changed();
+                r
+            });
+            if changed {
+                app.ui_mode_touched = true;
+                app.send_cmd(Command::DisplayOffMins(app.ui_display_off_mins));
+            }
 
-        // —— 通用 ——
-        section_label(ui, "通用");
-        ui.checkbox(
-            &mut app.ui_minimize_on_close,
-            "关闭窗口时最小化到托盘（而不是退出）",
-        );
+            warn_banner(
+                ui,
+                "实验性：先白天短测，暂勿过夜依赖",
+                "三次夜间挂死均发生在屏幕已关 + 系统保活在场的等价环境；过夜请用防息屏。",
+            )
+            .on_hover_text(
+                "本机 2026-11 三次夜间锁屏挂死均发生在「屏幕已关 + PowerToys Awake 持 SYSTEM 声明」\
+                 的等价环境，嫌疑是核显驱动的关屏低功耗转换。关屏超时临时写入电源计划\
+                 （VIDEOIDLE/VIDEOCONLOCK AC/DC 四项），暂停/退出自动恢复，每 5 分钟防组策略漂移重应用。",
+            );
+        }
+    }
+    // 高度对齐：把较短的模式块补齐到统一高度，切换时零跳动。
+    let used = ui.cursor().top() - top;
+    ui.add_space((MODE_SETTINGS_MIN_HEIGHT - used).max(0.0));
+
+    // —— 定时自动停止 ——
+    section_label(ui, "定时自动停止");
+    if ui
+        .checkbox(&mut app.ui_auto_stop_enabled, "启用定时停止")
+        .changed()
+    {
+        let dur = if app.ui_auto_stop_enabled {
+            Some(Duration::from_secs(app.ui_auto_stop_mins * 60))
+        } else {
+            None
+        };
+        app.send_cmd(Command::AutoStop(dur));
+    }
+    ui.add_enabled_ui(app.ui_auto_stop_enabled, |ui| {
+        let mut changed = false;
+        setting_row(ui, "时长", |ui| {
+            let r = ui.add_sized(
+                [160.0, 22.0],
+                egui::Slider::new(&mut app.ui_auto_stop_mins, 5..=480).suffix(" 分钟"),
+            );
+            changed = r.changed();
+            r
+        });
+        if changed {
+            app.send_cmd(Command::AutoStop(Some(Duration::from_secs(
+                app.ui_auto_stop_mins * 60,
+            ))));
+        }
+        if ui
+            .checkbox(&mut app.ui_lock_on_stop, "到点立即锁屏")
+            .on_hover_text(
+                "仅释放电源声明并不会让屏幕立刻上锁（要等系统自己的息屏超时），\
+                 开启后到点直接 LockWorkStation。",
+            )
+            .changed()
+        {
+            app.send_cmd(Command::SetLockOnStop(app.ui_lock_on_stop));
+        }
     });
+
+    // —— 通用 ——
+    section_label(ui, "通用");
+    ui.checkbox(
+        &mut app.ui_minimize_on_close,
+        "关闭窗口时最小化到托盘（而不是退出）",
+    );
+}
+
+/// 设置行：左侧标签、右侧控件，垂直居中——原生设置面板的标准行式。
+fn setting_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    right: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(12.5).color(TEXT_MAIN));
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), right)
+            .inner
+    })
+    .response
 }
 
 /// 双模式分段选择器：整行两枚按钮，选中者填充模式色（青=防息屏，靛蓝=息屏防睡）。
 fn segmented_mode(ui: &mut egui::Ui, app: &mut MyApp) {
     egui::Frame::new()
         .fill(INSET_FILL)
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(3))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::same(2))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let width = (ui.available_width() - 10.0) / 2.0;
+                let width = (ui.available_width() - 8.0) / 2.0;
                 let keep_selected = app.ui_mode == Mode::KeepScreenOn;
                 let guard_selected = app.ui_mode == Mode::ScreenOffGuard;
                 if seg_button(ui, "防息屏 · 屏幕常亮", width, keep_selected, ACCENT_COLOR).clicked()
@@ -632,7 +658,7 @@ fn segmented_mode(ui: &mut egui::Ui, app: &mut MyApp) {
         });
 }
 
-/// 分段选择器里的一枚按钮：选中时填充模式色 + 白字，未选中时融入底槽。
+/// 分段选择器里的一枚按钮：选中时填充模式色 + 深色字（亮底上黑字对比度最好）。
 fn seg_button(
     ui: &mut egui::Ui,
     text: &str,
@@ -641,56 +667,30 @@ fn seg_button(
     color: Color32,
 ) -> egui::Response {
     let txt = RichText::new(text).size(12.5).strong().color(if selected {
-        Color32::WHITE
+        Color32::BLACK
     } else {
         TEXT_DIM
     });
     let btn = egui::Button::new(txt)
-        .min_size(Vec2::new(width, 32.0))
+        .min_size(Vec2::new(width, 30.0))
         .fill(if selected { color } else { INSET_FILL })
-        .corner_radius(CornerRadius::same(8));
+        .corner_radius(CornerRadius::same(4));
     ui.add(btn)
 }
 
-/// 小节标题：小号加粗灰字 + 向右延伸的细分隔线。
+/// 小节标题：小号灰字 + 上下留白，不加装饰线（扁平设置面板风格）。
 fn section_label(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(text).size(11.0).strong().color(TEXT_FAINT));
-        let w = (ui.available_width() - 4.0).max(0.0);
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(w.max(4.0), 1.0), egui::Sense::hover());
-        let cy = rect.center().y;
-        ui.painter().line_segment(
-            [egui::pos2(rect.left(), cy), egui::pos2(rect.right(), cy)],
-            Stroke::new(1.0, CARD_STROKE),
-        );
-    });
-    ui.add_space(2.0);
+    ui.add_space(10.0);
+    ui.label(RichText::new(text).size(11.0).strong().color(TEXT_FAINT));
+    ui.add_space(4.0);
 }
 
-/// 圆角小徽标（彩色圆点 + 短文本），用于状态/模式标识。
-fn chip(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
+/// 橙色警示横幅：标题加粗 + 单行详情，返回 Response 供调用方挂悬停长文。
+fn warn_banner(ui: &mut egui::Ui, title: &str, detail: &str) -> egui::Response {
     egui::Frame::new()
-        .fill(tint(color, 0.16))
-        .stroke(Stroke::new(1.0, tint(color, 0.5)))
-        .corner_radius(CornerRadius::same(9))
-        .inner_margin(Margin::symmetric(9, 3))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(9.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 3.5, color);
-                ui.label(RichText::new(text).size(12.0).strong().color(color));
-            });
-        })
-        .response
-}
-
-/// 橙色警示横幅：标题加粗 + 详情小字，用于实验性提示与安全降级说明。
-fn warn_banner(ui: &mut egui::Ui, title: &str, detail: &str) {
-    egui::Frame::new()
-        .fill(tint(ORANGE, 0.12))
-        .stroke(Stroke::new(1.0, tint(ORANGE, 0.4)))
-        .corner_radius(CornerRadius::same(10))
+        .fill(tint(ORANGE, 0.1))
+        .stroke(Stroke::new(1.0, tint(ORANGE, 0.35)))
+        .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -698,7 +698,8 @@ fn warn_banner(ui: &mut egui::Ui, title: &str, detail: &str) {
             if !detail.is_empty() {
                 ui.label(RichText::new(detail).size(11.0).color(TEXT_DIM));
             }
-        });
+        })
+        .response
 }
 
 fn mode_label(mode: Mode) -> &'static str {
@@ -724,64 +725,68 @@ fn status_color(status: Status) -> Color32 {
     }
 }
 
-fn log_card(ui: &mut egui::Ui, snap: &Snapshot) {
-    card(ui, |ui| {
-        ui.horizontal(|ui| {
+/// 日志区：窗口最后一个区块，吃掉全部剩余高度——默认窗口尺寸下日志完整可见。
+fn log_section(ui: &mut egui::Ui, snap: &Snapshot) {
+    section_label(ui, "日志");
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("时间")
+                .monospace()
+                .size(10.5)
+                .color(TEXT_FAINT),
+        );
+        ui.label(
+            RichText::new("事件")
+                .monospace()
+                .size(10.5)
+                .color(TEXT_FAINT),
+        );
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             ui.label(
-                RichText::new("运行日志")
-                    .size(12.0)
-                    .strong()
-                    .color(TEXT_DIM),
+                RichText::new(format!("{} 条", snap.log.len()))
+                    .monospace()
+                    .size(10.5)
+                    .color(TEXT_FAINT),
             );
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+        });
+    });
+    ui.add_space(2.0);
+    let height = ui.available_height().max(72.0);
+    ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height(height)
+        .stick_to_bottom(true)
+        .show(ui, |ui| {
+            for line in snap.log.iter() {
+                let color = match line.level {
+                    LogLevel::Info => Color32::from_rgb(195, 203, 220),
+                    LogLevel::Warn => AMBER,
+                    LogLevel::Error => RED,
+                };
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(line.time.as_str())
+                            .monospace()
+                            .size(10.5)
+                            .color(TEXT_FAINT),
+                    );
+                    ui.label(
+                        RichText::new(line.msg.as_str())
+                            .monospace()
+                            .size(10.5)
+                            .color(color),
+                    );
+                });
+            }
+            if snap.log.is_empty() {
                 ui.label(
-                    RichText::new(format!("{} 条", snap.log.len()))
-                        .size(11.0)
+                    RichText::new("（暂无日志）")
+                        .monospace()
+                        .size(10.5)
                         .color(TEXT_FAINT),
                 );
-            });
+            }
         });
-        ui.add_space(4.0);
-        ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .max_height(150.0)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for line in snap.log.iter() {
-                    let color = match line.level {
-                        LogLevel::Info => Color32::from_rgb(195, 203, 220),
-                        LogLevel::Warn => AMBER,
-                        LogLevel::Error => RED,
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(line.time.as_str())
-                                .monospace()
-                                .size(10.5)
-                                .color(TEXT_FAINT),
-                        );
-                        ui.label(RichText::new(line.msg.as_str()).size(11.5).color(color));
-                    });
-                }
-                if snap.log.is_empty() {
-                    ui.label(RichText::new("（暂无日志）").size(11.5).color(TEXT_FAINT));
-                }
-            });
-    });
-}
-
-/// 统一的"卡片"容器：圆角、轻微描边、内边距，营造现代分层感。
-fn card<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    egui::Frame::new()
-        .fill(CARD_FILL)
-        .stroke(Stroke::new(1.0, CARD_STROKE))
-        .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin::same(14))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.vertical_centered_justified(|ui| add_contents(ui)).inner
-        })
-        .inner
 }
 
 // ------------------------------------------------------------------ 托盘 + Win32 窗口句柄 ----
@@ -832,6 +837,9 @@ fn setup_tray(
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
+        // 左键留给「显示/隐藏主窗口」手势，菜单只由右键唤起
+        // （tray-icon 0.26 默认 menu_on_left_click=true，即用户反馈的左键弹菜单问题）。
+        .with_menu_on_left_click(false)
         .with_tooltip("WinKeepAwake · 防息屏守护")
         .with_icon(icon)
         .build();
@@ -983,8 +991,8 @@ fn main() -> eframe::Result {
     let viewport = egui::ViewportBuilder::default()
         .with_app_id("com.winkeepawake.app")
         .with_title("WinKeepAwake · 防息屏守护")
-        .with_inner_size([460.0, 780.0])
-        .with_min_inner_size([400.0, 560.0])
+        .with_inner_size([460.0, 840.0])
+        .with_min_inner_size([420.0, 620.0])
         .with_icon(Arc::new(icon_data));
 
     let options = eframe::NativeOptions {
