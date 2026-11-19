@@ -8,13 +8,14 @@ use std::ffi::c_void;
 use windows::core::BOOL;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Power::{
-    SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
+    SetThreadExecutionState, ES_AWAYMODE_REQUIRED, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
+    ES_SYSTEM_REQUIRED,
 };
 use windows::Win32::System::Shutdown::LockWorkStation;
-use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::SystemInformation::{GetLocalTime, GetTickCount};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetLastInputInfo, KEYBDINPUT, KEYEVENTF_KEYUP, LASTINPUTINFO, MOUSEINPUT, MOUSEEVENTF_MOVE,
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, VK_F13,
+    GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    KEYEVENTF_KEYUP, LASTINPUTINFO, MOUSEEVENTF_MOVE, MOUSEINPUT, VK_F13,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, SetForegroundWindow, ShowWindow, SW_HIDE, SW_SHOW,
@@ -155,6 +156,20 @@ pub fn keep_awake_active() {
     }
 }
 
+/// 「息屏防睡」模式的电源声明：要求系统保持唤醒（阻塞空闲→待机类低功耗转换的判定），
+/// 但**不**要求显示器保持开启——让关屏超时正常生效，屏幕按计划熄灭而系统满速运行。
+///
+/// 标志组合（`ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED`）刻意与本机
+/// kuku 签到任务的 keep-awake 包装完全一致：那是唯一在这台机器上被长期验证过
+/// 「关屏 + 锁屏状态下进程整段存活、无冻死」的组合（2026-11-07 之后的历次夜间任务）。
+/// AWAYMODE（远离模式，媒体服务器场景标准做法）在本机 S0 待机被禁用的情况下基本是
+/// 空操作，但保留它以与已验证组合零偏差。
+pub fn keep_awake_system_only() {
+    unsafe {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+    }
+}
+
 /// 撤销电源管理声明（`ES_CONTINUOUS` 单独使用 = 清除之前设置的持续标志），
 /// 用于定时自动停止 / 手动停止 / 程序退出时的资源回收。
 pub fn keep_awake_release() {
@@ -164,10 +179,19 @@ pub fn keep_awake_release() {
 }
 
 /// 立即锁定工作站（`LockWorkStation`，普通权限即可，无需管理员）。
-/// 用于"定时自动停止 + 到点立即锁屏"：仅释放电源声明并不会让屏幕立刻上锁
+/// 用于"定时自动停止 + 到点立即锁屏"：仅释放电源声明并没有让屏幕立刻上锁
 /// （那要等系统自己的息屏超时），直接锁屏才符合"到点该锁了"的直觉。
 pub fn lock_workstation() -> bool {
     unsafe { LockWorkStation().is_ok() }
+}
+
+/// 当前本地时间 `HH:MM:SS`（运行日志时间戳用，`GetLocalTime` 免时区换算）。
+/// windows 0.62 起该 API 为无参返回值形式：`GetLocalTime() -> SYSTEMTIME`。
+pub fn now_hms() -> String {
+    unsafe {
+        let t = GetLocalTime();
+        format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
+    }
 }
 
 /// 原生窗口显隐辅助（绕过 egui `ViewportCommand::Visible`，因为该 API 在部分版本存在
@@ -235,10 +259,19 @@ mod tests {
     fn send_input_primitives_are_accepted() {
         // 只验证 SendInput 本身被接受（返回注入数量），这是确定性的，不依赖空闲时序。
         let _g = input_lock().lock().unwrap_or_else(|e| e.into_inner());
-        assert!(send_single_mouse_move(1, 0), "±1px 鼠标事件应被 SendInput 接受");
+        assert!(
+            send_single_mouse_move(1, 0),
+            "±1px 鼠标事件应被 SendInput 接受"
+        );
         assert!(send_single_mouse_move(-1, 0));
-        assert!(send_single_mouse_move(0, 0), "零位移鼠标事件应被 SendInput 接受");
-        assert!(perform_keyboard_injection(), "F13 按下+释放应被 SendInput 接受");
+        assert!(
+            send_single_mouse_move(0, 0),
+            "零位移鼠标事件应被 SendInput 接受"
+        );
+        assert!(
+            perform_keyboard_injection(),
+            "F13 按下+释放应被 SendInput 接受"
+        );
     }
 
     #[test]
@@ -275,6 +308,11 @@ mod tests {
             SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
         };
         assert_ne!(active.0, 0, "声明电源请求应成功");
+        // 息屏防睡组合（无 DISPLAY_REQUIRED）也应能成功声明
+        let sys_only = unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED)
+        };
+        assert_ne!(sys_only.0, 0, "息屏防睡电源声明应成功");
         let released = unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
         assert_ne!(released.0, 0, "释放电源声明应成功");
     }
@@ -284,5 +322,19 @@ mod tests {
         assert!(!window_is_visible(0));
         window_show(0); // 不应 panic，早退
         window_hide(0);
+    }
+
+    #[test]
+    fn now_hms_is_well_formed() {
+        let s = now_hms();
+        assert_eq!(s.len(), 8, "应为 HH:MM:SS: {s}");
+        let parts: Vec<&str> = s.split(':').collect();
+        assert_eq!(parts.len(), 3);
+        for p in parts {
+            assert!(
+                p.len() == 2 && p.chars().all(|c| c.is_ascii_digit()),
+                "非法时间片段: {s}"
+            );
+        }
     }
 }

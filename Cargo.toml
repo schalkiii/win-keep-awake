@@ -1,13 +1,18 @@
 [package]
 name = "win-keep-awake"
-version = "2.1.0"
+version = "2.3.0"
 edition = "2021"
-description = "防屏幕超时锁定工具：现代 GUI + 系统托盘后台常驻，多层输入注入 + 电源管理声明，可配置定时自动停止"
+description = "防息屏/防锁定工具：现代 GUI + 系统托盘常驻；双模式（屏幕常亮注入保活 / 息屏防睡——到点关屏但系统不休眠），可配置定时自动停止与托盘一键重启"
 
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow"] }
 tray-icon = "0.26"
 raw-window-handle = "0.6"
+
+# 构建期：生成 .ico 并嵌入 exe 资源段（不影响运行时体积与独立 exe 约束）
+[build-dependencies]
+winresource = "0.1"
+png = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

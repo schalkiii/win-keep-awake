@@ -5,8 +5,8 @@
 
 use std::path::PathBuf;
 
-use eframe::egui::{FontData, FontFamily};
 use eframe::egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+use eframe::egui::{FontData, FontFamily};
 
 /// 按优先级排列的候选字体（Windows 自带）。
 /// 用 `ttc` 时取第 0 个 face（即"微软雅黑"常规字重），skrifa 会自动处理集合索引。
