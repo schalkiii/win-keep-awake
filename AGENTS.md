@@ -3,7 +3,7 @@
 ## 定位
 Windows 原生防息屏/防锁定工具：eframe/egui GUI + 系统托盘后台常驻，**双工作模式**——
 防息屏（注入 + 完整电源声明，屏幕常亮）/ 息屏防睡（到点关屏但系统不休眠：无注入，
-`ES_SYSTEM|ES_AWAYMODE` 声明 + powercfg 动态改写关屏超时），键盘层(F13)可选默认关闭，
+`ES_SYSTEM|ES_AWAYMODE` 声明 + powercfg 动态改写关屏超时），键盘层(F13)默认开启，
 支持定时自动停止与托盘一键重启（`--screen-off-guard <mins>` 启动参数交接状态）。
 
 ## 怎么跑

@@ -218,7 +218,7 @@ impl Worker {
             running: true,
             idle_threshold_secs: snapshot.lock().unwrap().idle_threshold_secs,
             mouse_mode: MouseMode::ZeroMove,
-            keyboard_enabled: false,
+            keyboard_enabled: true,
             auto_stop_after: None,
             lock_on_stop: false,
             mode: Mode::KeepScreenOn,
@@ -759,7 +759,7 @@ mod tests {
             hooks: TestHooks {
                 idle_override: Some(Box::new(|| Some(9_000))),
                 mouse_inject: Some(Box::new(|m| (m, false))),
-                kb_inject: None,
+                kb_inject: Some(Box::new(|| true)),
                 lock: None,
                 power_begin: None,
                 power_end: None,
@@ -788,7 +788,7 @@ mod tests {
                 idle_override: Some(Box::new(|| Some(9_000))),
                 // 模拟运行时自检失败：请求 ZeroMove 但实际以 Jiggle 生效
                 mouse_inject: Some(Box::new(|_| (MouseMode::Jiggle, true))),
-                kb_inject: None,
+                kb_inject: Some(Box::new(|| true)),
                 lock: None,
                 power_begin: None,
                 power_end: None,

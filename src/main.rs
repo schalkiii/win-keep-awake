@@ -129,7 +129,7 @@ impl MyApp {
             _tray: tray,
             ui_idle_secs: DEFAULT_IDLE_SECS,
             ui_mouse_mode: MouseMode::ZeroMove,
-            ui_keyboard_enabled: false,
+            ui_keyboard_enabled: true,
             ui_auto_stop_enabled: false,
             ui_auto_stop_mins: 60,
             ui_lock_on_stop: false,
@@ -522,7 +522,7 @@ fn controls(ui: &mut egui::Ui, app: &mut MyApp) {
             );
 
             if ui
-                .checkbox(&mut app.ui_keyboard_enabled, "键盘层 F13（一般不需要）")
+                .checkbox(&mut app.ui_keyboard_enabled, "键盘层 F13")
                 .on_hover_text("注入 F13 虚拟键：常见键盘没有这个键，几乎不会被任何软件绑定。")
                 .changed()
             {
@@ -538,22 +538,15 @@ fn controls(ui: &mut egui::Ui, app: &mut MyApp) {
                 );
                 changed = r.changed();
                 r
-            });
+            })
+            .on_hover_text(
+                "到点后正常关屏：关屏超时临时写入电源计划（VIDEOIDLE/VIDEOCONLOCK AC/DC 四项），\
+                 暂停/退出自动恢复原值，每 5 分钟防组策略漂移重应用。",
+            );
             if changed {
                 app.ui_mode_touched = true;
                 app.send_cmd(Command::DisplayOffMins(app.ui_display_off_mins));
             }
-
-            warn_banner(
-                ui,
-                "实验性：先白天短测，暂勿过夜依赖",
-                "三次夜间挂死均发生在屏幕已关 + 系统保活在场的等价环境；过夜请用防息屏。",
-            )
-            .on_hover_text(
-                "本机 2026-11 三次夜间锁屏挂死均发生在「屏幕已关 + PowerToys Awake 持 SYSTEM 声明」\
-                 的等价环境，嫌疑是核显驱动的关屏低功耗转换。关屏超时临时写入电源计划\
-                 （VIDEOIDLE/VIDEOCONLOCK AC/DC 四项），暂停/退出自动恢复，每 5 分钟防组策略漂移重应用。",
-            );
         }
     }
     // 高度对齐：把较短的模式块补齐到统一高度，切换时零跳动。
