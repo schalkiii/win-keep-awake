@@ -9,8 +9,9 @@ Windows 原生防息屏/防锁定工具：eframe/egui GUI + 系统托盘后台�
 ## 怎么跑
 - 开发：`cargo run`（debug 带控制台）
 - 发布：`cargo build --release` → `target/release/WinKeepAwake.exe`（单文件、无控制台、约 5MB）
-- 门禁：`cargo test`（38 项）、`cargo clippy --all-targets` 必须零告警；
-  真机 powercfg 往返用 `cargo test -- --ignored` 手动跑（会临时改写 VIDEOIDLE 并还原）
+- 门禁：`cargo test`（40 项）、`cargo clippy --all-targets` 必须零告警；CI 另有 `cargo fmt --check`；
+  真机 powercfg 用例用 `cargo test -- --ignored` 手动跑（会临时改写 VIDEOIDLE 并还原；
+  两个真机测试经 `real_power_lock` 全局锁强制串行，勿移除）
 
 ## 技术栈
 - Rust `edition 2021`，仅目标 Windows 10/11。
@@ -43,9 +44,12 @@ Windows 原生防息屏/防锁定工具：eframe/egui GUI + 系统托盘后台�
   一次性首帧同步会因 worker 秒级轮询排队而读到旧值；GUI 视觉验证用 PrintWindow 抓窗
   （CopyFromScreen 会被前台窗口遮挡，SetForegroundWindow 受前台权限限制常静默失败）；
   egui 0.36 的 `Image::new` 只收 source（尺寸用 `fit_to_exact_size`），Slider 无宽度方法（用 `ui.add_sized`）。
+- 2.3.2/2.3.3（2026-11-19）：删息屏防睡「实验性」横幅（机制移入悬停）、键盘层 F13 默认开启，
+  并澄清契约——键盘层与鼠标注入**同周期叠加、非替代**（GUI 悬停 + README 措辞 + worker 测试锁定）。
 - **本机已知事实**（写代码/排障时必须记住）：开发机 ThinkBook 14 G8 IAL 三次夜间挂死均发生在
   「屏幕已关 + PowerToys Awake 持 SYSTEM 声明」环境下——系统级保活声明挡不住该机关屏路径挂死（嫌疑：核显驱动
-  igdkmdn64 关屏/runtime D3，12× 0x141）。所以息屏防睡在 UI/README 里标注为实验性，过夜推荐防息屏模式。
+  igdkmdn64 关屏/runtime D3，12× 0x141）。所以过夜推荐防息屏模式；息屏防睡的「实验性」警示横幅
+  已按用户要求移除（2.3.2，机制说明移入悬停），过夜风险边界说明保留在 README。
 - 本机电源计划受域 GPO 周期重置（手工值数小时内会被改回默认 600/300），故 worker 有 5 分钟漂移校验。
 - 单元测试只断言确定性逻辑；「空闲是否真被归零」「关屏是否发生」属系统时序，用集成脚本验证，勿在 `cargo test` 里断言时序。
 - git 仓库已存在（早期文档说法过时）；提交需用户明确要求。

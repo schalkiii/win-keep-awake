@@ -66,6 +66,8 @@ pub enum Status {
 }
 
 /// 工作线程对外发布的只读快照，GUI 每次重绘时读取展示。
+/// `Clone` 交给派生实现——新增字段自动纳入克隆，杜绝「手工逐字段抄写漏抄一栏」的静默旧值陷阱。
+#[derive(Clone)]
 pub struct Snapshot {
     pub status: Status,
     pub idle_threshold_secs: u64,
@@ -87,6 +89,9 @@ pub struct Snapshot {
     pub log: VecDeque<LogLine>,
 }
 
+/// 防息屏模式的默认空闲注入阈值（秒）——GUI 草稿初值与 `Snapshot` 默认值的单一来源。
+pub const DEFAULT_IDLE_SECS: u64 = 50;
+
 /// 息屏防睡的默认息屏等待（分钟）。
 pub const DEFAULT_DISPLAY_OFF_MINS: u64 = 5;
 
@@ -94,7 +99,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             status: Status::Running,
-            idle_threshold_secs: 50,
+            idle_threshold_secs: DEFAULT_IDLE_SECS,
             current_idle_ms: 0,
             effective_mouse_mode: MouseMode::ZeroMove,
             auto_stop_remaining_secs: None,
@@ -230,7 +235,7 @@ impl Worker {
         push_log(
             snapshot,
             LogLevel::Info,
-            "保活已启动（鼠标零位移 + 电源管理声明）",
+            "保活已启动（鼠标零位移 + F13 键盘层 + 电源管理声明）",
         );
 
         Self {
@@ -807,6 +812,80 @@ mod tests {
         let _ = h;
     }
 
+    /// v2.3.3 明确的键盘层契约：**叠加而非替代**。关闭键盘层后鼠标注入必须照常保活，
+    /// 且键盘钩子一次都不应被调到（worker 测试密闭性：绝不让真实输入漏进单元测试）。
+    #[test]
+    fn keyboard_disabled_mouse_still_fires() {
+        let (tx, rx) = mpsc::channel();
+        let snap = Arc::new(Mutex::new(Snapshot::default()));
+        let kb_calls = Arc::new(AtomicU32::new(0));
+        let kb_calls2 = kb_calls.clone();
+        let opts = WorkerOpts {
+            poll_interval: Duration::from_millis(10),
+            es_refresh_interval: Duration::from_secs(3600),
+            power_verify_interval: Duration::from_secs(3600),
+            hooks: TestHooks {
+                idle_override: Some(Box::new(|| Some(9_000))),
+                mouse_inject: Some(Box::new(|m| (m, true))),
+                kb_inject: Some(Box::new(move || {
+                    kb_calls2.fetch_add(1, Ordering::SeqCst);
+                    true
+                })),
+                lock: None,
+                power_begin: None,
+                power_end: None,
+                power_effective: None,
+            },
+        };
+        let h = spawn_worker_with(rx, snap.clone(), opts);
+        // 先关键盘层、再降阈值：命令按序应用，首次注入时键盘层必然已关
+        tx.send(Command::KeyboardEnabled(false)).unwrap();
+        tx.send(Command::IdleThresholdSecs(1)).unwrap();
+        assert!(wait_until(&snap, |s| s.injections_done >= 2));
+        assert_eq!(
+            kb_calls.load(Ordering::SeqCst),
+            0,
+            "键盘层关闭后不应有任何键盘注入"
+        );
+        drop(tx);
+        let _ = h;
+    }
+
+    /// 键盘层开启时与鼠标注入同周期成对触发（默认即开启，验证叠加关系成立）。
+    #[test]
+    fn keyboard_enabled_fires_alongside_mouse() {
+        let (tx, rx) = mpsc::channel();
+        let snap = Arc::new(Mutex::new(Snapshot::default()));
+        let kb_calls = Arc::new(AtomicU32::new(0));
+        let kb_calls2 = kb_calls.clone();
+        let opts = WorkerOpts {
+            poll_interval: Duration::from_millis(10),
+            es_refresh_interval: Duration::from_secs(3600),
+            power_verify_interval: Duration::from_secs(3600),
+            hooks: TestHooks {
+                idle_override: Some(Box::new(|| Some(9_000))),
+                mouse_inject: Some(Box::new(|m| (m, true))),
+                kb_inject: Some(Box::new(move || {
+                    kb_calls2.fetch_add(1, Ordering::SeqCst);
+                    true
+                })),
+                lock: None,
+                power_begin: None,
+                power_end: None,
+                power_effective: None,
+            },
+        };
+        let h = spawn_worker_with(rx, snap.clone(), opts);
+        tx.send(Command::IdleThresholdSecs(1)).unwrap();
+        assert!(wait_until(&snap, |s| s.injections_done >= 2));
+        assert!(
+            kb_calls.load(Ordering::SeqCst) >= 2,
+            "键盘层开启时应与鼠标注入同周期成对触发（叠加而非替代）"
+        );
+        drop(tx);
+        let _ = h;
+    }
+
     #[test]
     fn auto_stop_fires_at_deadline() {
         let (tx, rx) = mpsc::channel();
@@ -945,7 +1024,7 @@ mod tests {
                     count2.fetch_add(1, Ordering::SeqCst);
                     (m, true)
                 })),
-                kb_inject: None,
+                kb_inject: Some(Box::new(|| true)),
                 lock: None,
                 power_begin: None,
                 power_end: None,

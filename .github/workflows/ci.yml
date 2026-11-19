@@ -11,18 +11,21 @@ env:
 
 jobs:
   check:
-    name: Build · Test · Clippy (Windows)
+    name: Fmt · Build · Test · Clippy (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install stable toolchain (with clippy)
+      - name: Install stable toolchain (with clippy, rustfmt)
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
 
       - name: Build
         run: cargo build --verbose

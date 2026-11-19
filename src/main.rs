@@ -1,7 +1,8 @@
 //! WinKeepAwake —— 现代 GUI + 系统托盘版防屏幕超时锁定工具。
 //!
 //! 三层架构：
-//! 1. `worker` 线程：独立于渲染循环的后台保活逻辑（空闲检测、注入、电源声明、定时自动停止）。
+//! 1. `worker` 线程：独立于渲染循环的后台保活逻辑（空闲检测、注入、电源声明、模式切换、
+//!    电源计划启停与漂移校验、定时自动停止）。
 //! 2. 本文件的 `App`：eframe/egui 界面，只负责展示快照 + 收集配置并通过通道下发命令。
 //! 3. 托盘图标：通过 `set_event_handler` 回调直接调用 Win32 `ShowWindow` 显隐窗口，
 //!    不依赖 eframe 的 `ViewportCommand::Visible`（该 API 在部分版本存在"隐藏后无法再次显示"问题）。
@@ -28,9 +29,9 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 
 use crate::icon::{build_icon_rgba, build_mode_icon_rgba, IconVariant};
 use crate::jitter::{window_hide, window_is_visible, window_show, MouseMode};
-use crate::worker::{Command, LogLevel, Mode, Snapshot, Status, DEFAULT_DISPLAY_OFF_MINS};
-
-const DEFAULT_IDLE_SECS: u64 = 50;
+use crate::worker::{
+    Command, LogLevel, Mode, Snapshot, Status, DEFAULT_DISPLAY_OFF_MINS, DEFAULT_IDLE_SECS,
+};
 
 const MENU_ID_SHOW_HIDE: &str = "show_hide";
 const MENU_ID_TOGGLE_PAUSE: &str = "toggle_pause";
@@ -149,21 +150,8 @@ impl MyApp {
     }
 
     fn snapshot_clone(&self) -> Snapshot {
-        let s = self.snapshot.lock().unwrap();
-        Snapshot {
-            status: s.status,
-            idle_threshold_secs: s.idle_threshold_secs,
-            current_idle_ms: s.current_idle_ms,
-            effective_mouse_mode: s.effective_mouse_mode,
-            auto_stop_remaining_secs: s.auto_stop_remaining_secs,
-            auto_stop_total_secs: s.auto_stop_total_secs,
-            injections_done: s.injections_done,
-            mode: s.mode,
-            display_off_mins: s.display_off_mins,
-            display_off_active: s.display_off_active,
-            power_note: s.power_note.clone(),
-            log: s.log.clone(),
-        }
+        // Snapshot 已 derive(Clone)：新增字段自动纳入，不会出现手工抄写漏一栏的静默旧值。
+        self.snapshot.lock().unwrap().clone()
     }
 }
 
@@ -187,7 +175,7 @@ impl eframe::App for MyApp {
             } else {
                 // 进程即将退出：直接恢复电源计划（worker 可能来不及排空通道命令）。
                 crate::power::end_display_off();
-                worker_keep_awake_release_via_cmd(&self.cmd_tx);
+                pause_worker_via_cmd(&self.cmd_tx);
             }
         }
 
@@ -250,9 +238,9 @@ impl eframe::App for MyApp {
     }
 }
 
-fn worker_keep_awake_release_via_cmd(cmd_tx: &Arc<Mutex<Sender<Command>>>) {
-    // 关闭窗口且未开启"最小化到托盘"时：先释放电源声明，再退出进程（托盘菜单退出走的是
-    // jitter::keep_awake_release 直接调用，这里复用同一语义，走通道通知 worker 停止即可）。
+fn pause_worker_via_cmd(cmd_tx: &Arc<Mutex<Sender<Command>>>) {
+    // 关闭窗口且未开启"最小化到托盘"时：走通道让 worker 停止保活（由它释放电源声明、
+    // 恢复电源计划）；托盘菜单的退出/重启则经 tray_exit_cleanup 直接清理后 exit。
     let _ = cmd_tx.lock().unwrap().send(Command::Running(false));
 }
 
@@ -459,7 +447,8 @@ fn controls(ui: &mut egui::Ui, app: &mut MyApp) {
     segmented_mode(ui, app);
     ui.add_space(8.0);
 
-    let is_running = app.snapshot_clone().status == Status::Running;
+    // 主开关只需要运行状态这一个 Copy 字段：锁内直读，避免整份快照（含 120 条日志）深拷贝。
+    let is_running = app.snapshot.lock().unwrap().status == Status::Running;
     let (btn_txt, btn_color) = if is_running {
         ("暂停保活", AMBER)
     } else {
@@ -903,8 +892,7 @@ fn setup_tray(
                     Err(_) => false,
                 };
                 if spawned {
-                    crate::power::end_display_off();
-                    crate::jitter::keep_awake_release();
+                    tray_exit_cleanup();
                     std::process::exit(0);
                 } else {
                     crate::worker::push_log(
@@ -915,8 +903,7 @@ fn setup_tray(
                 }
             }
             MENU_ID_QUIT => {
-                crate::power::end_display_off();
-                crate::jitter::keep_awake_release();
+                tray_exit_cleanup();
                 std::process::exit(0);
             }
             _ => {}
@@ -924,6 +911,13 @@ fn setup_tray(
     }));
 
     tray
+}
+
+/// 托盘「退出 / 重启」共用的退出前清理：恢复电源计划 + 释放电源声明（随后调用方 exit，
+/// 不经过 eframe 的 on_exit——`std::process::exit` 必须在此之前显式完成这两步）。
+fn tray_exit_cleanup() {
+    crate::power::end_display_off();
+    crate::jitter::keep_awake_release();
 }
 
 fn toggle_window_visibility(hwnd_raw: isize) {

@@ -162,6 +162,15 @@ pub fn display_off_effective(secs: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
+
+    /// 两个真机测试都会真实读写电源计划（且 `begin/end` 共享静态 `BACKUP`），
+    /// 默认并行跑会互踩：把对方的写入误认成「原值」备份，污染系统基线
+    /// （2026-11-19 实测复现）。用全局锁强制串行——与 jitter.rs 的 input_lock 同一手法。
+    fn real_power_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     /// 本机 powercfg -q 实际输出样例（中文标签 GBK/UTF-8 皆可，只解析 0x 值）。
     const SAMPLE_QUERY: &str = "\
@@ -223,6 +232,7 @@ mod tests {
     #[test]
     #[ignore = "真实修改电源设置，仅在目标机器上手动验证"]
     fn real_powercfg_roundtrip() {
+        let _g = real_power_lock().lock().unwrap_or_else(|e| e.into_inner());
         let original = read_display_timeouts(VIDEOIDLE).expect("应能读到当前关屏超时");
         let probe = DisplayTimeouts {
             ac_secs: 555,
@@ -232,5 +242,23 @@ mod tests {
         assert_eq!(read_display_timeouts(VIDEOIDLE).unwrap(), probe);
         write_display_timeouts(VIDEOIDLE, original).expect("应能还原");
         assert_eq!(read_display_timeouts(VIDEOIDLE).unwrap(), original);
+    }
+
+    /// 备份语义真机验证（安全不变量的核心分支）：重复 `begin` 不覆盖原始备份，
+    /// `end` 恢复的是**最初**原值而非第一次写入的临时值。模拟「息屏防睡运行期间
+    /// 改等待分钟数 / 漂移重应用」的多重 begin 场景。
+    #[test]
+    #[ignore = "真实修改电源设置，仅在目标机器上手动验证"]
+    fn real_backup_not_overwritten_by_reapply() {
+        let _g = real_power_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let original = read_display_timeouts(VIDEOIDLE).expect("应能读到当前关屏超时");
+        begin_display_off(300).expect("begin(300) 应成功（备份原值并写入 300）");
+        begin_display_off(600).expect("begin(600) 应成功（只更新值，不覆盖备份）");
+        end_display_off();
+        assert_eq!(
+            read_display_timeouts(VIDEOIDLE).unwrap(),
+            original,
+            "end() 应恢复最初原值——备份未被二次 begin 覆盖"
+        );
     }
 }

@@ -108,7 +108,8 @@ pub fn perform_mouse_injection(mode: MouseMode) -> (MouseMode, bool) {
     }
 }
 
-/// 键盘注入层（可选，默认关闭）：注入 F13 虚拟键按下 + 释放。
+/// 键盘注入层（默认开启，鼠标注入的叠加补充）：注入 F13 虚拟键按下 + 释放。
+/// 与鼠标注入在同一保活周期先后触发（worker 先注鼠标、再注键盘），两层叠加不互斥。
 ///
 /// 为什么选 F13 而不是 Ctrl/Shift：修饰键单独按下/释放虽然通常也不会触发任何快捷键，
 /// 但仍存在与用户真实按键在极小概率下"时序重叠"从而被某些全局热键逻辑误判的组合风险；
@@ -116,8 +117,7 @@ pub fn perform_mouse_injection(mode: MouseMode) -> (MouseMode, bool) {
 /// 且不会像 Caps Lock / Scroll Lock 那样切换锁定状态或点亮键盘 LED，是"完全无副作用"的首选。
 ///
 /// 注意：这里用 Virtual-Key（wVk）而不是硬件 ScanCode 注入——因为 F13 在常用扫描码集里
-/// 没有标准编码，用虚拟键码更可靠；这是"无感优先"这一新需求下，相对"最原始物理扫描码"
-/// 做的一个有意识取舍（键盘层本身已改为默认关闭，仅在用户显式开启时才会用到）。
+/// 没有标准编码，用虚拟键码更可靠；这是相对"最原始物理扫描码"的一个有意识取舍。
 pub fn perform_keyboard_injection() -> bool {
     let inputs = [
         INPUT {
